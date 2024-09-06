@@ -6,6 +6,30 @@ import { TwitterApi } from 'twitter-api-v2';
 import { twitterAuth } from '../..';
 import { twitterCommon } from '../common';
 
+const getMimeType = (filename: string): string => {
+  const ext = filename.split('.').pop()?.toLowerCase();
+  const mimeTypes: { [key: string]: string } = {
+    'jpg': 'image/jpeg',
+    'jpeg': 'image/jpeg',
+    'png': 'image/png',
+    'gif': 'image/gif',
+    'mp4': 'video/mp4',
+  };
+  return mimeTypes[ext || ''] || 'application/octet-stream';
+};
+
+const uploadMedia = async (client: TwitterApi, file: ApFile): Promise<string> => {
+  const buffer = Buffer.from(file.base64, 'base64');
+  const mimeType = getMimeType(file.filename);
+
+  if (mimeType.startsWith('video/')) {
+    const mediaId = await client.v1.uploadMediaChunked(buffer, { mimeType });
+    return mediaId;
+  } else {
+    return client.v1.uploadMedia(buffer, { mimeType });
+  }
+};
+
 export const createTweet = createAction({
   auth: twitterAuth,
 
@@ -34,25 +58,17 @@ export const createTweet = createAction({
         context.propsValue.image_2,
         context.propsValue.image_3,
       ].filter((m): m is ApFile => !!m);
-      const uploadedMedia: Promise<string>[] = [];
-      media.forEach((m) => {
-        uploadedMedia.push(
-          userClient.v1.uploadMedia(Buffer.from(m.base64, 'base64'), {
-            mimeType: 'image/png',
-            target: 'tweet',
-          })
-        );
-      });
-      const uploaded = await Promise.all(uploadedMedia);
 
-      const response =
-        uploaded.length > 0
-          ? await userClient.v2.tweet(context.propsValue.text, {
-              media: {
-                media_ids: [...uploaded],
-              },
-            })
-          : await userClient.v2.tweet(context.propsValue.text);
+      const uploadedMedia = await Promise.all(media.map(m => uploadMedia(userClient, m)));
+
+      const response = uploadedMedia.length > 0
+        ? await userClient.v2.tweet(context.propsValue.text, {
+            media: {
+              media_ids: uploadedMedia,
+            },
+          })
+        : await userClient.v2.tweet(context.propsValue.text);
+
       return response || { success: true };
     } catch (error: any) {
       throw new Error(
